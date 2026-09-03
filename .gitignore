@@ -1,0 +1,5 @@
+reports/*
+!reports/.gitkeep
+*.log
+.env
+__pycache__/
