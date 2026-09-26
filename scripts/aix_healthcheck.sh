@@ -33,6 +33,7 @@
 
 MOCK_MODE="${MOCK_MODE:-0}"
 MOCK_PROFILE="${MOCK_PROFILE:-healthy}"
+MOCK_HOSTNAME="${MOCK_HOSTNAME:-mock-aix01}"
 CHECK_TYPE="${CHECK_TYPE:-healthcheck}"
 
 # Capacity thresholds
@@ -121,8 +122,36 @@ SCRIPT_DIR=$(cd "$(dirname "$0")" 2>/dev/null && pwd)
 PROJECT_DIR=$(dirname "$SCRIPT_DIR")
 REPORT_DIR="${PROJECT_DIR}/reports"
 
+case "$MOCK_MODE" in
+    0|1) ;;
+    *) echo "ERROR: MOCK_MODE must be 0 or 1." >&2; exit 3 ;;
+esac
+case "$CHECK_TYPE" in
+    ""|[!a-zA-Z0-9]*|*[!a-zA-Z0-9_.-]*)
+        echo "ERROR: CHECK_TYPE must be a filename-safe label starting with a letter or digit." >&2
+        exit 3 ;;
+esac
+if [ "${#CHECK_TYPE}" -gt 128 ]; then
+    echo "ERROR: CHECK_TYPE must be at most 128 characters." >&2
+    exit 3
+fi
+
 if [ "$MOCK_MODE" -eq 1 ] 2>/dev/null; then
-    HOST_SHORT="mock-${MOCK_PROFILE}"
+    # Identity must remain stable when the health profile changes.
+    case "$MOCK_PROFILE" in
+        healthy|degraded) ;;
+        *) echo "ERROR: MOCK_PROFILE must be healthy or degraded." >&2; exit 3 ;;
+    esac
+    case "$MOCK_HOSTNAME" in
+        ""|*[!a-zA-Z0-9-]*|-*|*-)
+            echo "ERROR: MOCK_HOSTNAME must be a short hostname (letters, digits, internal hyphens)." >&2
+            exit 3 ;;
+    esac
+    if [ "${#MOCK_HOSTNAME}" -gt 63 ]; then
+        echo "ERROR: MOCK_HOSTNAME must be at most 63 characters." >&2
+        exit 3
+    fi
+    HOST_SHORT="$MOCK_HOSTNAME"
 else
     HOST_SHORT=$(hostname 2>/dev/null | cut -d. -f1)
 fi
@@ -210,8 +239,8 @@ collect_uptime()
 collect_lparstat_info()
 {
     if [ "$MOCK_MODE" -eq 1 ]; then
-        cat <<'MOCK'
-Node Name                                  : aixdb01
+        cat <<MOCK
+Node Name                                  : $HOST_SHORT
 Partition Name                             : PROD_DB01
 Partition Number                           : 4
 Type                                       : Shared-SMT-8
@@ -701,20 +730,20 @@ collect_powerha_detail()
 {
     if [ "$MOCK_MODE" -eq 1 ]; then
         if [ "$MOCK_PROFILE" = "degraded" ]; then
-            cat <<'MOCK'
+            cat <<MOCK
 PowerHA Version: 7.2.8
 Cluster Name: PROD_CLUSTER
 Cluster State: ERROR
-Node aixdb01: UP
+Node $HOST_SHORT: UP
 Node aixdb02: DOWN
 Resource Group DB_RG: ERROR
 MOCK
         else
-            cat <<'MOCK'
+            cat <<MOCK
 PowerHA Version: 7.2.8
 Cluster Name: PROD_CLUSTER
 Cluster State: STABLE
-Node aixdb01: UP
+Node $HOST_SHORT: UP
 Node aixdb02: UP
 Resource Group DB_RG: ONLINE
 MOCK
@@ -1424,7 +1453,10 @@ check_powerha()
 
 write_summary()
 {
-    aix_level=$(collect_oslevel 2>/dev/null | head -1)
+    aix_level=""
+    if [ "$RESULT" -ne 3 ]; then
+        aix_level=$(collect_oslevel 2>/dev/null | head -1)
+    fi
     cat > "$SUMMARY_FILE" <<EOF_SUMMARY
 HOST=$HOST_SHORT
 CHECK_TYPE=$CHECK_TYPE
@@ -1471,6 +1503,25 @@ main()
         if [ "$system_type" != "AIX" ]; then
             echo "ERROR: real mode can only run on AIX."
             echo "For development use MOCK_MODE=1."
+            echo "OVERALL HEALTH     : UNKNOWN - no checks executed"
+            # No component was assessed: none may claim OK in the summary.
+            OS_STATUS=3
+            PERF_STATUS=3
+            PAGING_STATUS=3
+            FS_STATUS=3
+            VG_STATUS=3
+            PV_STATUS=3
+            MPIO_STATUS=3
+            DEVICE_STATUS=3
+            IO_STATUS=3
+            ERRPT_STATUS=3
+            NETWORK_STATUS=3
+            SERVICE_STATUS=3
+            NTP_STATUS=3
+            DUMP_STATUS=3
+            POWERHA_STATUS=3
+            POWERHA_STATE="UNKNOWN"
+            OVERALL_STATUS=3
             return 3
         fi
     fi
@@ -1538,10 +1589,32 @@ main()
 # EXECUTION / REPORT GENERATION
 ###############################################################################
 
-main > "$REPORT_FILE" 2>&1
-RESULT=$?
+# Retain the existing naming contract, but refuse collisions for either file.
+# The exclusive report open also arbitrates concurrent captures of the same name.
+if [ -e "$REPORT_FILE" ] || [ -L "$REPORT_FILE" ] ||
+   [ -e "$SUMMARY_FILE" ] || [ -L "$SUMMARY_FILE" ]; then
+    echo "ERROR: report or summary already exists; no files overwritten. Retry with a new CHECK_TYPE or later timestamp." >&2
+    exit 3
+fi
+set -C
+if {
+    # Noclobber protects the report open only; collectors reuse temporary files.
+    set +C
+    main
+    RESULT=$?
+} > "$REPORT_FILE" 2>&1; then
+    :
+else
+    set +C
+    echo "ERROR: cannot create new report: $REPORT_FILE; no summary generated." >&2
+    exit 3
+fi
+set +C
 
-write_summary
+if ! (set -C; write_summary); then
+    echo "ERROR: cannot create summary: $SUMMARY_FILE; capture is incomplete." >&2
+    exit 3
+fi
 cat "$REPORT_FILE"
 
 echo ""
