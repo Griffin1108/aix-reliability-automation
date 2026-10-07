@@ -1,6 +1,6 @@
 # Project context
 
-Last updated: 2026-09-26. This is the durable project handover; update it as work
+Last updated: 2026-09-30. This is the durable project handover; update it as work
 progresses. Use Git status/history and actual implementation to verify details
 that can become stale. Development instructions are in `../AGENTS.md` and the
 operational contract is in `runbook.md`.
@@ -45,7 +45,11 @@ disk I/O, errpt, network, services, NTP, dump configuration and PowerHA.
 The 31-field `KEY=value` summary contains metadata, component statuses, nine
 metrics, PowerHA state and overall status/code. The comparator consumes these
 summaries without executing their contents. Inventory and playbooks remain
-placeholders; no Jenkins, Ansible or Terraform integration is implemented yet.
+placeholders; Ansible and Terraform integration is not implemented yet. A local
+Windows Jenkins Pipeline checks out the repository, runs the mock test suite,
+and archives its test log. A root `Jenkinsfile` now prepares this workflow for
+loading from Git; publication and an SCM-backed build remain pending. See
+`jenkins-windows-lab.md` for setup, job configuration and limitations.
 
 ## Decisions and current behavior
 
@@ -101,6 +105,27 @@ placeholders; no Jenkins, Ansible or Terraform integration is implemented yet.
 5. Durable project context and repository development instructions added from
    the user's handover. The user subsequently approved committing, pushing and
    merging the reviewed implementation into main.
+6. Phases 1–4 were committed as `173f07f`, merged into main as `cdcd576`, and both
+   branches were pushed and verified. The user then approved exploring Jenkins
+   on Windows first, with a separate RHEL installation to follow. Jenkins LTS
+   2.568.3 and a dedicated Java 21.0.12.1 runtime have been installed locally.
+   Browser setup is complete and the user is learning through guided builds.
+7. User-supplied Jenkins logs confirm all 41 tests passed without skips in the
+   Windows Freestyle job (169.811 seconds), then in the inline Pipeline. Pipeline
+   build #4 passed in 154.242 seconds and archived `all-tests-4.txt`, confirmed
+   by the user's screenshot. These were mock tests, not real AIX validation.
+8. The user authorized preparing the root `Jenkinsfile`. It uses `checkout scm`,
+   validates Windows/Python/Bash, preserves test failure exit codes, and archives
+   the current build's test log in the Tests stage's `post always` block. It
+   disables concurrent builds and applies a ten-minute timeout. Commit/push and
+   switching the job to SCM remain separate pending steps.
+9. Local validation of the prepared Jenkinsfile: the running Jenkins Declarative
+   validator accepted it. Its exact batch blocks passed in a temporary project:
+   41 tests in 104.409 seconds, no skips, with the expected report file. A
+   separate intentional failing test returned batch exit 1 and retained its
+   failure log. Python compilation, Bash syntax and Git whitespace checks
+   passed. The SCM-backed Jenkins build and failed-build artifact archiving
+   remain unverified until the job is switched and those cases are run.
 
 ## Remaining limitations
 
@@ -117,18 +142,24 @@ placeholders; no Jenkins, Ansible or Terraform integration is implemented yet.
   evidence. Retain and check collection exit codes, use a trusted report
   directory and never treat an incomplete capture as successful evidence.
 * A healthy comparison is not proof of application readiness or authorization
-  to deploy. No orchestration, automated approval gate, HTML/PDF reporting,
-  observability integration or evidence archive service exists yet.
+  to deploy. Jenkins currently orchestrates mock tests and archives their logs;
+  it does not yet retain the temporary mock health reports or perform live
+  change orchestration. No automated approval gate, HTML/PDF reporting or
+  observability integration exists yet.
+* Windows Jenkins builds run on the built-in node in a local learning lab.
+  Python comes from a user-specific Codex runtime path; a dedicated installation
+  and separate execution agent remain future work. Archiving after a failed
+  test has been configured but not yet demonstrated by a failing Pipeline run.
 
 ## Agreed next steps (not authorization to implement)
 
-1. Final engineering review is complete and publication is approved. Complete
-   and verify the commit, push and merge into main; use Git history to establish
-   completion before repeating any publication actions.
-2. Discuss the first Jenkins pipeline: checkout, automated tests, healthy and
-   degraded mock collection, pre/post comparisons, expected exit-code assertions
-   and evidence archiving. A correctly detected degraded mock must pass its
-   test, rather than make the entire pipeline fail unexpectedly.
+1. Review the local Jenkinsfile and documentation, obtain publication approval,
+   then switch `aix-reliability-pipeline` to Pipeline script from SCM and verify
+   a fresh 41-test build with archived evidence. Keep teaching one step at a time.
+2. Set up a dedicated Python installation and separate RHEL Jenkins lab when
+   authorized and VM access is supplied. Later extend CI to retain mock health
+   reports and comparisons as well as test logs. A correctly detected degraded
+   mock must pass its test rather than fail the entire pipeline unexpectedly.
 3. Introduce Ansible, prepare the RHEL automation controller and add inventories
    and playbooks. Evaluate the IBM Power AIX collection for later real targets.
 4. Introduce Terraform for an appropriate provisioning lab, then investigate
@@ -149,6 +180,7 @@ how new technologies connect to infrastructure work, and distinguish tested
 facts from assumptions. Preserve capabilities, avoid unsupported success claims
 and keep this documentation synchronized. Do not commit, push, merge, delete
 branches, install services, provision paid resources or change infrastructure
-without the user's approval. The user has explicitly approved committing,
-pushing and merging Phases 1–4. This does not authorize implementing another
-phase or making infrastructure changes.
+without the user's approval. Commit/push/merge approval for Phases 1–4 was
+fulfilled. The user subsequently approved installing Jenkins on this Windows
+computer for learning. That does not authorize unrelated infrastructure changes
+or committing/pushing the new setup documentation.
