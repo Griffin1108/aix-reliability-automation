@@ -9,8 +9,8 @@ pipeline {
     }
 
     environment {
-        // Temporary lab dependency: replace with a dedicated Python installation later.
-        PYTHON_EXE = 'C:\\Users\\tkamb\\.cache\\codex-runtimes\\codex-primary-runtime\\dependencies\\python\\python.exe'
+        // Dedicated Python installation for the Windows learning lab.
+        PYTHON_EXE = 'C:\\Users\\tkamb\\AppData\\Local\\Programs\\Python\\Python314\\python.exe'
         AIX_TEST_BASH = 'C:\\Program Files\\Git\\bin\\bash.exe'
     }
 

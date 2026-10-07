@@ -94,11 +94,14 @@ inline configuration locally. Build #5 completed SUCCESS: all 41 tests passed
 in 53.367 seconds without skips. The archived `all-tests-5.txt` was retrieved
 and its results verified directly. No actual AIX target was involved.
 
-The Python executable is currently the existing Codex-bundled runtime at
-`C:\Users\tkamb\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe`.
-Jenkins reported Python 3.12.14. `python` resolves to a Windows Store shortcut
-and `py` was unavailable, so the Pipeline uses an explicit path. A permanent
-setup should use a dedicated Python installation; change `PYTHON_EXE` then.
+The published Pipeline initially used Codex-bundled Python 3.12.14. On
+2026-10-07 the user installed standalone Python 3.14.8 (64-bit), verified at
+`C:\Users\tkamb\AppData\Local\Programs\Python\Python314\python.exe`.
+The local Jenkinsfile now sets `PYTHON_EXE` to that dedicated installation;
+publication and a Jenkins build with this new runtime remain pending. Using an
+explicit path avoids relying on the controller's inherited PATH or Store aliases.
+Local compatibility validation with Python 3.14.8 passed all 41 tests in
+52.267 seconds without skips; this was not a Jenkins build.
 Git Bash is set through `AIX_TEST_BASH` to
 `C:\Program Files\Git\bin\bash.exe`. Tests add the required Unix utilities to
 their child processes' PATH. This Jenkinsfile targets this Windows lab only.

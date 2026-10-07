@@ -133,6 +133,11 @@ job loads it from Git; SCM-backed build #5 passed all 41 tests. See
     53.367 seconds with no skips, and `all-tests-5.txt` was retrieved from the
     build's archived artifacts and verified. Python compilation and Bash syntax
     checks also passed. This completes the Windows mock CI milestone.
+11. Standalone Python 3.14.8 was installed by the user and verified locally on
+    2026-10-07. All 41 tests passed with this runtime in 52.267 seconds, without
+    skips. The local Jenkinsfile and lab guide have been updated for its path;
+    the user approved committing this change. Push approval and verification
+    through Jenkins remain pending.
 
 ## Remaining limitations
 
@@ -154,18 +159,19 @@ job loads it from Git; SCM-backed build #5 passed all 41 tests. See
   change orchestration. No automated approval gate, HTML/PDF reporting or
   observability integration exists yet.
 * Windows Jenkins builds run on the built-in node in a local learning lab.
-  Python comes from a user-specific Codex runtime path; a dedicated installation
-  and separate execution agent remain future work. Archiving after a failed
+  The user installed standalone Python 3.14.8 on 2026-10-07; the local Jenkinsfile
+  now points to it, but publication and a Jenkins run with it remain pending.
+  A separate execution agent remains future work. Archiving after a failed
   test has been configured but not yet demonstrated by a failing Pipeline run.
 
 ## Agreed next steps (not authorization to implement)
 
-1. Windows mock CI is complete. Next discuss hardening: dedicated Python,
-   separate execution agent, fail-on-skip/empty-suite protection, build retention
+1. Windows mock CI is complete. Finish the standalone Python migration, then
+   discuss a separate execution agent, fail-on-skip/empty-suite protection, build retention
    and a controlled failed-build archiving demonstration. Keep teaching one
    step at a time; production readiness is not established by mock CI.
-2. Set up a dedicated Python installation and separate RHEL Jenkins lab when
-   authorized and VM access is supplied. Later extend CI to retain mock health
+2. Set up the separate RHEL Jenkins lab when authorized and VM access is
+   supplied. Later extend CI to retain mock health
    reports and comparisons as well as test logs. A correctly detected degraded
    mock must pass its test rather than fail the entire pipeline unexpectedly.
 3. Introduce Ansible, prepare the RHEL automation controller and add inventories
