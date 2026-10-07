@@ -1,6 +1,6 @@
 # Project context
 
-Last updated: 2026-09-30. This is the durable project handover; update it as work
+Last updated: 2026-10-07. This is the durable project handover; update it as work
 progresses. Use Git status/history and actual implementation to verify details
 that can become stale. Development instructions are in `../AGENTS.md` and the
 operational contract is in `runbook.md`.
@@ -47,8 +47,8 @@ metrics, PowerHA state and overall status/code. The comparator consumes these
 summaries without executing their contents. Inventory and playbooks remain
 placeholders; Ansible and Terraform integration is not implemented yet. A local
 Windows Jenkins Pipeline checks out the repository, runs the mock test suite,
-and archives its test log. A root `Jenkinsfile` now prepares this workflow for
-loading from Git; publication and an SCM-backed build remain pending. See
+and archives its test log. The root `Jenkinsfile` is published and the Jenkins
+job loads it from Git; SCM-backed build #5 passed all 41 tests. See
 `jenkins-windows-lab.md` for setup, job configuration and limitations.
 
 ## Decisions and current behavior
@@ -117,15 +117,22 @@ loading from Git; publication and an SCM-backed build remain pending. See
 8. The user authorized preparing the root `Jenkinsfile`. It uses `checkout scm`,
    validates Windows/Python/Bash, preserves test failure exit codes, and archives
    the current build's test log in the Tests stage's `post always` block. It
-   disables concurrent builds and applies a ten-minute timeout. Commit/push and
-   switching the job to SCM remain separate pending steps.
+   disables concurrent builds and applies a ten-minute timeout. Publication and
+   the SCM switch were subsequently completed in milestone 10 below.
 9. Local validation of the prepared Jenkinsfile: the running Jenkins Declarative
    validator accepted it. Its exact batch blocks passed in a temporary project:
    41 tests in 104.409 seconds, no skips, with the expected report file. A
    separate intentional failing test returned batch exit 1 and retained its
    failure log. Python compilation, Bash syntax and Git whitespace checks
-   passed. The SCM-backed Jenkins build and failed-build artifact archiving
-   remain unverified until the job is switched and those cases are run.
+   passed. Failed-build artifact archiving remains unverified in Jenkins itself.
+10. On 2026-10-07, the user approved finishing the Jenkins milestone. Commit
+    `7df4b88` published the Jenkinsfile and lab documentation to main. The local
+    controller was started, the previous inline job configuration backed up,
+    and `aix-reliability-pipeline` switched to Pipeline script from SCM, using
+    `*/main` and `Jenkinsfile`. Build #5 completed SUCCESS: 41 tests passed in
+    53.367 seconds with no skips, and `all-tests-5.txt` was retrieved from the
+    build's archived artifacts and verified. Python compilation and Bash syntax
+    checks also passed. This completes the Windows mock CI milestone.
 
 ## Remaining limitations
 
@@ -153,9 +160,10 @@ loading from Git; publication and an SCM-backed build remain pending. See
 
 ## Agreed next steps (not authorization to implement)
 
-1. Review the local Jenkinsfile and documentation, obtain publication approval,
-   then switch `aix-reliability-pipeline` to Pipeline script from SCM and verify
-   a fresh 41-test build with archived evidence. Keep teaching one step at a time.
+1. Windows mock CI is complete. Next discuss hardening: dedicated Python,
+   separate execution agent, fail-on-skip/empty-suite protection, build retention
+   and a controlled failed-build archiving demonstration. Keep teaching one
+   step at a time; production readiness is not established by mock CI.
 2. Set up a dedicated Python installation and separate RHEL Jenkins lab when
    authorized and VM access is supplied. Later extend CI to retain mock health
    reports and comparisons as well as test logs. A correctly detected degraded
@@ -182,5 +190,6 @@ and keep this documentation synchronized. Do not commit, push, merge, delete
 branches, install services, provision paid resources or change infrastructure
 without the user's approval. Commit/push/merge approval for Phases 1–4 was
 fulfilled. The user subsequently approved installing Jenkins on this Windows
-computer for learning. That does not authorize unrelated infrastructure changes
-or committing/pushing the new setup documentation.
+computer for learning. On 2026-10-07 the user approved publication and completion
+of the Jenkins milestone; its Jenkinsfile and documentation were committed and
+pushed. This does not authorize unrelated infrastructure changes.

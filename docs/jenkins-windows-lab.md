@@ -85,8 +85,14 @@ returned `Jenkinsfile successfully validated.` Its exact batch blocks ran in
 an isolated temporary project: 41 tests passed in 104.409 seconds without skips
 and created the expected log. An intentional isolated test failure confirmed
 exit 1 and a retained failure log. Python compilation, Bash syntax and Git
-whitespace checks also passed. This does not yet establish an SCM-backed job
-run or actual Jenkins archiving after a failure.
+whitespace checks also passed. Actual Jenkins archiving after a test failure
+still needs a controlled demonstration.
+
+On 2026-10-07 the Jenkinsfile was published to main in commit `7df4b88`. The
+existing job was switched to Pipeline script from SCM after backing up its
+inline configuration locally. Build #5 completed SUCCESS: all 41 tests passed
+in 53.367 seconds without skips. The archived `all-tests-5.txt` was retrieved
+and its results verified directly. No actual AIX target was involved.
 
 The Python executable is currently the existing Codex-bundled runtime at
 `C:\Users\tkamb\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe`.
@@ -97,23 +103,24 @@ Git Bash is set through `AIX_TEST_BASH` to
 `C:\Program Files\Git\bin\bash.exe`. Tests add the required Unix utilities to
 their child processes' PATH. This Jenkinsfile targets this Windows lab only.
 
-## Switch to a Jenkinsfile after publication approval
+## SCM configuration (completed)
 
-The file is prepared locally; it is not yet published or loaded by Jenkins.
-After reviewing, committing and pushing the approved changes:
+The existing job now loads the published Jenkinsfile. These are its settings
+and the steps to reproduce the configuration:
 
 1. Open `aix-reliability-pipeline` -> Configure -> Pipeline.
 2. Set Definition to **Pipeline script from SCM** and SCM to **Git**.
 3. Set Repository URL to
    `https://github.com/Griffin1108/aix-reliability-automation.git`.
 4. Use Credentials **none** for the currently working public checkout.
-5. Set Branch Specifier to `*/main` after the Jenkinsfile is published on main.
+5. Set Branch Specifier to `*/main`.
 6. Set Script Path to `Jenkinsfile`, save, and select **Build Now**.
 7. Verify Jenkins loads the Jenkinsfile from SCM, runs all 41 tests without
    skips, and archives `all-tests-<build number>.txt` with SUCCESS.
 
 Do not paste this SCM-based file into the inline script field: `checkout scm`
-requires the job's SCM context. The inline job remains usable until the switch.
+requires the job's SCM context. The previous inline configuration was retained
+in `%TEMP%\aix-reliability-pipeline-before-scm.xml` for local recovery.
 
 ## Sources
 
