@@ -163,3 +163,80 @@ missing evidence hidden by those defaults. Optional checks may report OK when
 not required. A zero comparison exit code is not a guarantee of application
 readiness or approval to deploy. Validate real AIX command output, permissions,
 KornShell execution and representative workloads before production use.
+
+## Optional boot-readiness profile
+
+The agreed design keeps one deployable shell script with named collector and
+check functions. `HEALTH_PROFILE=standard` is the default and runs the existing
+15 categories. `HEALTH_PROFILE=boot-readiness` runs those same checks and adds
+boot evidence. No checks are skipped or assigned an artificial OK to make room
+for the profile. Invalid profile names or copy policies exit 3 before reports
+are created.
+
+For a mock demonstration from Bash:
+
+```sh
+MOCK_MODE=1 MOCK_PROFILE=healthy HEALTH_PROFILE=boot-readiness BOOT_MIN_COPIES=2 CHECK_TYPE=boot-precheck bash scripts/aix_healthcheck.sh
+MOCK_MODE=1 MOCK_PROFILE=degraded HEALTH_PROFILE=boot-readiness BOOT_MIN_COPIES=2 CHECK_TYPE=boot-postcheck bash scripts/aix_healthcheck.sh
+```
+
+The first exits 0; the second intentionally exits 2. The simulated hostname
+remains `mock-aix01` for both. Retain the printed report/summary paths and exit
+codes. On a future authorized global AIX LPAR, the corresponding invocation is:
+
+```sh
+HEALTH_PROFILE=boot-readiness BOOT_MIN_COPIES=2 CHECK_TYPE=boot-precheck /usr/bin/ksh scripts/aix_healthcheck.sh
+```
+
+This real-mode invocation has not been tested on AIX. The profile reads
+`uname -W`, checks for the VIOS CLI, and reads `lsvg -p rootvg`, `lsvg -l rootvg`,
+`lslv -m hd5`, `bootlist -m normal -o`, `lsdev -l <disk> -F status` and
+`bootinfo -B <disk>`. It never rebuilds a boot image, changes the bootlist,
+repairs mirrors, varies volume groups or reboots. WPARs, detected VIOS systems
+and unknown execution scope return UNKNOWN for the boot assessment.
+
+| Evidence | Assessment |
+| --- | --- |
+| Rootvg PV/LV inventory | Missing/removed PVs and stale LVs are CRITICAL. `closed/syncd` is a normal LV state. LP/PP counts are shown as allocation evidence. |
+| hd5 map | Validate LP/PP/PV counts against LV metadata. Each candidate disk must contain every hd5 LP in contiguous physical partitions. Split/noncontiguous copies require review; no complete copy is CRITICAL. |
+| Normal bootlist | Assess local hdisk entries for the current rootvg and hd5. Unresolved `-` entries, inactive devices, missing complete copies or reported boot capability 0 are CRITICAL. |
+| Candidate policy | `BOOT_MIN_COPIES=1`, `2` or `3` counts distinct qualifying disks. Repeated path entries count once. A nonzero count below the requested minimum is WARNING; no candidates with otherwise conclusive evidence is CRITICAL. |
+| Incomplete evidence | Command failure, stderr diagnostics, empty/whitespace-only output, malformed/inconsistent inventories or maps, unsupported attributes/devices and alternate-OS disks are UNKNOWN. Known critical findings remain visible in the report. |
+
+The text report records the selected profile, policy, raw command evidence,
+findings and suggested next actions. Numeric severity uses the existing order
+OK < WARNING < CRITICAL < UNKNOWN. The boot result can raise, but never lower,
+the existing `VG_LV_STATUS` and overall status. It adds no summary field or
+sixteenth comparison component. Read the text report to distinguish a boot
+finding from another VG/LV issue, particularly when the aggregate was already
+CRITICAL.
+
+The 31-field summary does not record the profile or policy. The comparator
+cannot detect mismatched settings or distinguish different faults within the
+same VG/LV category. Use the same `HEALTH_PROFILE`, `BOOT_MIN_COPIES` and other
+collection settings for both captures, and retain their text reports. This is
+a deliberate compatibility tradeoff; detailed inventory comparison needs a
+separately designed schema extension.
+
+An hd5 candidate is a disk with the assessed placement, availability and
+firmware boot capability; it is not a verified boot image. These checks do not
+prove boot-image contents or freshness, per-path reachability, firmware boot
+success, whole-rootvg mirroring or independence of storage failure domains.
+The default minimum of one avoids assuming that every LPAR must be mirrored.
+`bootinfo -B` returning 0 calls for investigation; adapter/IPL history can
+affect the result, so it alone does not prove a disk has failed. Network,
+removable-media and alternate boot-LV policies need manual assessment.
+
+Implementation is original and based on IBM command semantics; no vendor UHC
+code is incorporated. Engineering references:
+
+* [IBM bootlist command](https://www.ibm.com/docs/en/aix/7.2.0?topic=b-bootlist-command)
+* [IBM lslv command](https://www.ibm.com/docs/en/aix/7.2.0?topic=l-lslv-command)
+* [IBM preparation checks and hd5 map examples](https://www.ibm.com/support/pages/preparing-migrate-aix)
+* [IBM bootinfo capability and adapter/boot history](https://www.ibm.com/support/pages/node/631755)
+* [IBM WPAR identification](https://www.ibm.com/support/pages/am-i-wpar-workload-partition-or-regular-aix-vm-virtual-machine)
+
+Tests use deterministic collectors and additional malformed/failure fixtures
+inside temporary projects. Bash mock success does not validate native AIX
+output variants, permissions, KornShell or actual boot behavior. Complete
+those checks on an authorized test LPAR before production use.

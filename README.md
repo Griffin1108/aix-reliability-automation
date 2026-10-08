@@ -53,6 +53,22 @@ If Bash is unavailable, integration tests explicitly report a skip.
 Real AIX/KornShell and hardware validation remain required before production
 deployment. No actual AIX LPAR was used for the development tests.
 
+An optional boot-readiness profile adds rootvg consistency, hd5 placement and
+normal bootlist checks within the same shell script. The default `standard`
+profile keeps the existing checks. Try the additional checks in mock mode:
+
+```sh
+MOCK_MODE=1 MOCK_PROFILE=healthy HEALTH_PROFILE=boot-readiness BOOT_MIN_COPIES=2 CHECK_TYPE=boot-precheck bash scripts/aix_healthcheck.sh
+```
+
+`BOOT_MIN_COPIES` requires 1 (default), 2 or 3 distinct hd5 boot candidates;
+it does not establish redundancy of every rootvg LV. Boot findings contribute
+to `VG_LV_STATUS`, preserving the 31-field summary. Use identical profiles and
+policies for pre/post comparison and retain the detailed reports. See the
+[boot-readiness runbook](docs/runbook.md#optional-boot-readiness-profile) for
+supported evidence and limitations. An OK result does not verify boot-image
+contents or guarantee that a reboot will succeed.
+
 Read [project context](docs/PROJECT_CONTEXT.md) for objectives, architecture,
 verified milestones and the roadmap, and [AGENTS.md](AGENTS.md) for repository
 development instructions and approval boundaries.

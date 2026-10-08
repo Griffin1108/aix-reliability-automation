@@ -35,6 +35,9 @@ MOCK_MODE="${MOCK_MODE:-0}"
 MOCK_PROFILE="${MOCK_PROFILE:-healthy}"
 MOCK_HOSTNAME="${MOCK_HOSTNAME:-mock-aix01}"
 CHECK_TYPE="${CHECK_TYPE:-healthcheck}"
+HEALTH_PROFILE="${HEALTH_PROFILE:-standard}"
+# Required distinct, verified hd5 boot candidates (not whole-rootvg redundancy).
+BOOT_MIN_COPIES="${BOOT_MIN_COPIES:-1}"
 
 # Capacity thresholds
 FS_WARN="${FS_WARN:-80}"
@@ -125,6 +128,14 @@ REPORT_DIR="${PROJECT_DIR}/reports"
 case "$MOCK_MODE" in
     0|1) ;;
     *) echo "ERROR: MOCK_MODE must be 0 or 1." >&2; exit 3 ;;
+esac
+case "$HEALTH_PROFILE" in
+    standard|boot-readiness) ;;
+    *) echo "ERROR: HEALTH_PROFILE must be standard or boot-readiness." >&2; exit 3 ;;
+esac
+case "$BOOT_MIN_COPIES" in
+    1|2|3) ;;
+    *) echo "ERROR: BOOT_MIN_COPIES must be 1, 2 or 3." >&2; exit 3 ;;
 esac
 case "$CHECK_TYPE" in
     ""|[!a-zA-Z0-9]*|*[!a-zA-Z0-9_.-]*)
@@ -1448,6 +1459,355 @@ check_powerha()
 }
 
 ###############################################################################
+# BOOT READINESS (opt-in; kept in this script alongside existing checks)
+###############################################################################
+
+collect_boot_wpar()
+{
+    if [ "$MOCK_MODE" -eq 1 ]; then echo 0; else uname -W; fi
+}
+
+collect_boot_vios()
+{
+    if [ "$MOCK_MODE" -ne 1 ] && [ -x /usr/ios/cli/ioscli ]; then echo 1; else echo 0; fi
+}
+
+collect_boot_rootvg_pvs()
+{
+    if [ "$MOCK_MODE" -eq 1 ]; then
+        echo 'rootvg:'
+        echo 'PV_NAME PV STATE TOTAL PPs FREE PPs FREE DISTRIBUTION'
+        echo 'hdisk0 active 1000 500 100..100..100..100..100'
+        if [ "$MOCK_PROFILE" = degraded ]; then
+            echo 'hdisk1 missing 1000 500 100..100..100..100..100'
+        else
+            echo 'hdisk1 active 1000 500 100..100..100..100..100'
+        fi
+    else
+        LC_ALL=C lsvg -p rootvg
+    fi
+}
+
+collect_boot_rootvg_lvs()
+{
+    if [ "$MOCK_MODE" -eq 1 ]; then
+        echo 'rootvg:'
+        echo 'LV NAME TYPE LPs PPs PVs LV STATE MOUNT POINT'
+        echo 'hd5 boot 1 2 2 closed/syncd N/A'
+        if [ "$MOCK_PROFILE" = degraded ]; then
+            echo 'hd4 jfs2 4 8 2 open/stale /'
+        else
+            echo 'hd4 jfs2 4 8 2 open/syncd /'
+        fi
+    else
+        LC_ALL=C lsvg -l rootvg
+    fi
+}
+
+collect_boot_hd5_map()
+{
+    if [ "$MOCK_MODE" -eq 1 ]; then
+        printf '%s\n' 'hd5:N/A' 'LP PP1 PV1 PP2 PV2 PP3 PV3' '0001 0001 hdisk0 0001 hdisk1'
+    else
+        LC_ALL=C lslv -m hd5
+    fi
+}
+
+collect_bootlist()
+{
+    if [ "$MOCK_MODE" -eq 1 ]; then
+        printf '%s\n' 'hdisk0 blv=hd5 pathid=0' 'hdisk1 blv=hd5 pathid=0'
+    else
+        # Display ONLY. Adding device arguments to this command would mutate it.
+        LC_ALL=C bootlist -m normal -o
+    fi
+}
+
+collect_boot_device_status()
+{
+    if [ "$MOCK_MODE" -eq 1 ]; then echo Available; else LC_ALL=C lsdev -l "$1" -F status; fi
+}
+
+collect_boot_capability()
+{
+    if [ "$MOCK_MODE" -eq 1 ]; then echo 1; else LC_ALL=C bootinfo -B "$1"; fi
+}
+
+boot_finding()
+{
+    # Keep critical evidence visible even if another finding makes the result UNKNOWN.
+    printf '%s [%s]: %s\n' "$(status_name "$2")" "$1" "$3"
+    [ -n "$4" ] && printf '  Action: %s\n' "$4"
+    if [ "$2" -gt "$BOOT_STATUS" ]; then BOOT_STATUS=$2; fi
+    case "$1" in
+        rootvg) [ "$2" -gt "$BOOT_ROOTVG_STATUS" ] && BOOT_ROOTVG_STATUS=$2 ;;
+        hd5) [ "$2" -gt "$BOOT_HD5_STATUS" ] && BOOT_HD5_STATUS=$2 ;;
+        bootlist) [ "$2" -gt "$BOOT_LIST_STATUS" ] && BOOT_LIST_STATUS=$2 ;;
+    esac
+    return 0
+}
+
+boot_capture()
+{
+    typeset boot_label="$1" boot_file="$2" boot_rc
+    shift 2
+    "$@" > "$boot_file" 2> "$boot_file.err"
+    boot_rc=$?
+    printf '\nEvidence: %s (exit %s)\n' "$boot_label" "$boot_rc"
+    cat "$boot_file" "$boot_file.err"
+    [ "$boot_rc" -eq 0 ] && [ ! -s "$boot_file.err" ] &&
+        LC_ALL=C grep '[^[:space:]]' "$boot_file" > /dev/null
+}
+
+check_boot_rootvg()
+{
+    typeset boot_disk boot_state boot_total boot_lv boot_type boot_lps boot_pps boot_pvs boot_mount
+    BOOT_PVS_VALID=0
+    BOOT_LVS_VALID=0
+    if boot_capture 'lsvg -p rootvg' "$TMP_BASE.bootpvs" collect_boot_rootvg_pvs &&
+       awk '
+        NF==0 {next}
+        $0 ~ /^rootvg:[[:space:]]*$/ {vg++; next}
+        $1=="PV_NAME" && $2=="PV" && $3=="STATE" {header++; next}
+        {if (NF!=5 || $1 !~ /^[a-zA-Z][a-zA-Z0-9_]*$/ || seen[$1]++ ||
+             $2 !~ /^(active|missing|removed)$/ || $3 !~ /^[0-9]+$/ || $3+0<1 ||
+             $4 !~ /^[0-9]+$/ || $4+0>$3+0 || $5 !~ /^[0-9.\-]+$/) bad=1
+         print $1, $2, $3; rows++}
+        END {exit (bad || vg!=1 || header!=1 || rows==0) ? 3 : 0}
+       ' "$TMP_BASE.bootpvs" > "$TMP_BASE.bootpvs.parsed"; then
+        BOOT_PVS_VALID=1
+        while read boot_disk boot_state boot_total; do
+            if [ "$boot_state" != active ]; then
+                boot_finding rootvg 2 "$boot_disk is $boot_state in rootvg." 'Investigate rootvg disk availability before rebooting.'
+            fi
+        done < "$TMP_BASE.bootpvs.parsed"
+    else
+        boot_finding rootvg 3 'Rootvg PV evidence is unavailable or malformed.' 'Collect valid lsvg -p rootvg output on supported AIX.'
+    fi
+    if boot_capture 'lsvg -l rootvg' "$TMP_BASE.bootlvs" collect_boot_rootvg_lvs &&
+       awk '
+        NF==0 {next}
+        $0 ~ /^rootvg:[[:space:]]*$/ {vg++; next}
+        $1=="LV" && $2=="NAME" && $3=="TYPE" {header++; next}
+        {if (NF!=7 || $1 !~ /^[a-zA-Z][a-zA-Z0-9_]*$/ || seen[$1]++ ||
+             $3 !~ /^[0-9]+$/ || $3+0<1 || $4 !~ /^[0-9]+$/ || $4+0<$3+0 ||
+             $5 !~ /^[0-9]+$/ || $5+0<1 || $6 !~ /^(open|closed)\/(syncd|stale)$/) bad=1
+         if ($1=="hd5") {hd5++; if ($2!="boot") bad=1}
+         print; rows++}
+        END {exit (bad || vg!=1 || header!=1 || rows==0 || hd5!=1) ? 3 : 0}
+       ' "$TMP_BASE.bootlvs" > "$TMP_BASE.bootlvs.parsed"; then
+        BOOT_LVS_VALID=1
+        while read boot_lv boot_type boot_lps boot_pps boot_pvs boot_state boot_mount; do
+            case "$boot_state" in
+                */stale) boot_finding rootvg 2 "$boot_lv has stale partitions ($boot_state)." 'Investigate and restore rootvg consistency before rebooting.' ;;
+            esac
+        done < "$TMP_BASE.bootlvs.parsed"
+        BOOT_HD5_LPS=$(awk '$1=="hd5" {print $3}' "$TMP_BASE.bootlvs.parsed")
+        BOOT_HD5_PPS=$(awk '$1=="hd5" {print $4}' "$TMP_BASE.bootlvs.parsed")
+        BOOT_HD5_PVS=$(awk '$1=="hd5" {print $5}' "$TMP_BASE.bootlvs.parsed")
+    else
+        boot_finding rootvg 3 'Rootvg LV evidence is unavailable, malformed, or lacks a unique boot-type hd5.' 'Inspect rootvg LV allocation and state.'
+    fi
+    if [ "$BOOT_ROOTVG_STATUS" -eq 0 ]; then
+        boot_finding rootvg 0 'Reported rootvg PVs are active and LVs are synchronized.' ''
+    fi
+    echo 'Rootvg LP/PP counts above describe allocation; disk count alone does not prove mirroring or failure independence.'
+}
+
+check_boot_hd5()
+{
+    typeset boot_disk boot_kind boot_state
+    BOOT_MAP_VALID=0
+    if ! boot_capture 'lslv -m hd5' "$TMP_BASE.bootmap" collect_boot_hd5_map; then
+        boot_finding hd5 3 'hd5 mapping collection failed or returned no evidence.' 'Collect a complete hd5 map before assessing placement.'
+        return
+    fi
+    if [ "$BOOT_LVS_VALID" -ne 1 ] || [ "$BOOT_PVS_VALID" -ne 1 ]; then
+        boot_finding hd5 3 'Cannot validate hd5 mapping against unavailable rootvg evidence.' 'Resolve rootvg collection problems first.'
+        return
+    fi
+    if ! awk -v lps="$BOOT_HD5_LPS" -v pps="$BOOT_HD5_PPS" -v pvs="$BOOT_HD5_PVS" '
+        NR==FNR {capacity[$1]=$3+0; next}
+        NF==0 {next}
+        /^hd5:/ {title++; next}
+        $1=="LP" && $2=="PP1" && $3=="PV1" {header++; next}
+        {if ((NF!=3 && NF!=5 && NF!=7) || $1 !~ /^[0-9]+$/ || $1+0<1 || $1+0>lps || seen[$1+0]++) bad=1
+         lp=$1+0; rows++
+         for (i=2; i<NF; i+=2) {
+            pp=$i; disk=$(i+1)
+            if (pp !~ /^[0-9]+$/ || pp+0<1 || (disk in capacity && pp+0>capacity[disk]) ||
+                disk !~ /^[a-zA-Z][a-zA-Z0-9_]*$/ ||
+                mapped[disk,lp]++ || physical[disk,pp+0]++) bad=1
+            part[disk,lp]=pp+0; copies[disk]++; total++
+         }}
+        END {
+            for (d in copies) disks++
+            if (bad || title!=1 || header!=1 || rows!=lps || total!=pps || disks!=pvs) exit 3
+            for (d in copies) {
+                complete=(copies[d]==lps)
+                for (n=1; n<=lps; n++)
+                    if (!mapped[d,n] || (n>1 && part[d,n]!=part[d,n-1]+1)) complete=0
+                print d, (complete ? "complete" : "incomplete")
+            }
+        }
+    ' "$TMP_BASE.bootpvs.parsed" "$TMP_BASE.bootmap" > "$TMP_BASE.bootmap.parsed"; then
+        boot_finding hd5 3 'hd5 mapping is malformed, truncated, or inconsistent with LV allocation.' 'Recollect matching rootvg and hd5 evidence.'
+        return
+    fi
+    BOOT_MAP_VALID=1
+    while read boot_disk boot_kind; do
+        boot_state=$(awk -v disk="$boot_disk" '$1==disk {print $2}' "$TMP_BASE.bootpvs.parsed")
+        if [ -z "$boot_state" ]; then
+            BOOT_MAP_VALID=0
+            boot_finding hd5 3 "$boot_disk in hd5 mapping is absent from rootvg evidence." 'Resolve conflicting disk membership evidence.'
+        fi
+        if [ "$boot_kind" != complete ]; then
+            boot_finding hd5 1 "$boot_disk does not contain a complete contiguous hd5 copy." 'Review boot LV placement before relying on this disk.'
+        fi
+    done < "$TMP_BASE.bootmap.parsed"
+    if ! awk '$2=="complete" {found=1} END {exit found?0:1}' "$TMP_BASE.bootmap.parsed"; then
+        boot_finding hd5 2 'No disk has a complete contiguous hd5 copy.' 'Resolve boot LV placement before rebooting.'
+    elif [ "$BOOT_HD5_STATUS" -eq 0 ]; then
+        boot_finding hd5 0 'hd5 map has complete contiguous copies on the reported disks.' ''
+    fi
+}
+
+check_boot_list()
+{
+    typeset boot_line boot_disk boot_attribute boot_supported boot_state boot_kind boot_count
+    typeset boot_blv_seen boot_path_seen boot_glob_disabled
+    boot_count=0
+    : > "$TMP_BASE.bootseen"
+    if ! boot_capture 'bootlist -m normal -o' "$TMP_BASE.bootlist" collect_bootlist; then
+        boot_finding bootlist 3 'Normal bootlist evidence is unavailable.' 'Read the normal bootlist on the global AIX system.'
+        return
+    fi
+    while IFS= read -r boot_line || [ -n "$boot_line" ]; do
+        # Disable pathname expansion while splitting untrusted command output.
+        case "$-" in *f*) boot_glob_disabled=1 ;; *) boot_glob_disabled=0 ;; esac
+        set -f
+        set -- $boot_line
+        [ "$boot_glob_disabled" -eq 0 ] && set +f
+        [ "$#" -eq 0 ] && continue
+        boot_disk=$1
+        shift
+        if [ "$boot_disk" = '-' ]; then
+            boot_finding bootlist 2 'Bootlist contains an unresolved device (-).' 'Review and correct the boot configuration before rebooting.'
+            continue
+        fi
+        case "$boot_disk" in
+            hdisk[0-9]* ) ;;
+            *) boot_finding bootlist 3 "Unsupported boot device: $boot_disk." 'Review network, removable-media or alternative boot policies manually.'; continue ;;
+        esac
+        case "$boot_disk" in
+            *[!a-zA-Z0-9_]*) boot_finding bootlist 3 'Malformed boot device name.' 'Recollect the bootlist.'; continue ;;
+        esac
+        boot_supported=1
+        boot_blv_seen=0
+        boot_path_seen=0
+        for boot_attribute in "$@"; do
+            case "$boot_attribute" in
+                blv=hd5)
+                    [ "$boot_blv_seen" -eq 1 ] && boot_supported=0
+                    boot_blv_seen=1 ;;
+                pathid=*)
+                    [ "$boot_path_seen" -eq 1 ] && boot_supported=0
+                    boot_path_seen=1
+                    case "${boot_attribute#pathid=}" in
+                        ''|*[!0-9]*) boot_supported=0 ;;
+                    esac ;;
+                *) boot_supported=0 ;;
+            esac
+        done
+        if [ "$boot_supported" -ne 1 ]; then
+            boot_finding bootlist 3 "Unsupported bootlist attributes for $boot_disk." 'Review alternate boot logical volumes and unrecognized attributes manually.'
+            continue
+        fi
+        if [ "$BOOT_PVS_VALID" -ne 1 ] || [ "$BOOT_MAP_VALID" -ne 1 ]; then
+            boot_finding bootlist 3 "Cannot assess $boot_disk without valid rootvg and hd5 evidence." 'Resolve collection problems first.'
+            continue
+        fi
+        boot_state=$(awk -v disk="$boot_disk" '$1==disk {print $2}' "$TMP_BASE.bootpvs.parsed")
+        if [ -z "$boot_state" ]; then
+            boot_finding bootlist 3 "$boot_disk is outside the currently assessed rootvg." 'Review intentional alternate-OS boot entries manually.'
+            continue
+        fi
+        if [ "$boot_state" != active ]; then
+            boot_finding bootlist 2 "$boot_disk is not active in rootvg." 'Restore disk availability before relying on this boot entry.'
+            continue
+        fi
+        boot_kind=$(awk -v disk="$boot_disk" '$1==disk {print $2}' "$TMP_BASE.bootmap.parsed")
+        if [ "$boot_kind" != complete ]; then
+            boot_finding bootlist 2 "$boot_disk lacks a complete contiguous hd5 copy." 'Review bootlist and boot LV placement.'
+            continue
+        fi
+        # Repeated path entries must not inflate the candidate count.
+        grep -qx "$boot_disk" "$TMP_BASE.bootseen" && continue
+        echo "$boot_disk" >> "$TMP_BASE.bootseen"
+        if ! boot_capture "lsdev status for $boot_disk" "$TMP_BASE.bootdevice" collect_boot_device_status "$boot_disk"; then
+            boot_finding bootlist 3 "Device availability collection failed for $boot_disk." 'Inspect ODM device status.'
+            continue
+        fi
+        boot_state=$(cat "$TMP_BASE.bootdevice")
+        case "$boot_state" in
+            Available) ;;
+            Defined|Stopped) boot_finding bootlist 2 "$boot_disk device status is $boot_state." 'Investigate device availability before rebooting.'; continue ;;
+            *) boot_finding bootlist 3 "Unrecognized device status for $boot_disk." 'Recollect device state.'; continue ;;
+        esac
+        if ! boot_capture "bootinfo -B $boot_disk" "$TMP_BASE.bootcap" collect_boot_capability "$boot_disk"; then
+            boot_finding bootlist 3 "Boot capability collection failed for $boot_disk." 'Check command availability and permissions.'
+            continue
+        fi
+        boot_state=$(cat "$TMP_BASE.bootcap")
+        case "$boot_state" in
+            1) boot_count=$((boot_count + 1)) ;;
+            0) boot_finding bootlist 2 "Firmware does not currently report boot capability for $boot_disk." 'Review adapter support and IPL history; this alone does not prove disk failure.' ;;
+            *) boot_finding bootlist 3 "Unrecognized boot capability for $boot_disk." 'Recollect bootinfo evidence.' ;;
+        esac
+    done < "$TMP_BASE.bootlist"
+    echo "Verified hd5 boot candidates: $boot_count; required: $BOOT_MIN_COPIES"
+    if [ "$BOOT_LIST_STATUS" -ne 3 ]; then
+        if [ "$boot_count" -eq 0 ]; then
+            boot_finding bootlist 2 'No verified local hd5 boot candidate in the normal bootlist.' 'Resolve the reported readiness findings before rebooting.'
+        elif [ "$boot_count" -lt "$BOOT_MIN_COPIES" ]; then
+            boot_finding bootlist 1 'Fewer distinct boot candidates than policy requires.' 'Review the boot redundancy requirement and configuration.'
+        elif [ "$BOOT_LIST_STATUS" -eq 0 ]; then
+            boot_finding bootlist 0 'Normal bootlist meets the configured hd5 candidate policy.' ''
+        fi
+    fi
+}
+
+check_boot_readiness()
+{
+    typeset boot_scope boot_vios
+    BOOT_STATUS=0
+    BOOT_ROOTVG_STATUS=0
+    BOOT_HD5_STATUS=0
+    BOOT_LIST_STATUS=0
+    separator 'BOOT READINESS'
+    echo "Profile: $HEALTH_PROFILE; minimum hd5 boot candidates: $BOOT_MIN_COPIES"
+    if boot_capture 'uname -W' "$TMP_BASE.bootscope" collect_boot_wpar &&
+       boot_capture 'VIOS applicability' "$TMP_BASE.bootvios" collect_boot_vios; then
+        boot_scope=$(cat "$TMP_BASE.bootscope")
+        boot_vios=$(cat "$TMP_BASE.bootvios")
+    else
+        boot_scope=unknown
+        boot_vios=unknown
+    fi
+    if [ "$boot_scope" != 0 ] || [ "$boot_vios" != 0 ]; then
+        boot_finding scope 3 'Boot readiness requires a global AIX system; WPAR/VIOS or unknown scope is unsupported.' 'Assess boot readiness on a supported global AIX LPAR.'
+    else
+        check_boot_rootvg
+        check_boot_hd5
+        check_boot_list
+    fi
+    echo 'Limits: boot image contents/freshness, per-path reachability and actual reboot success are not verified.'
+    echo "BOOT READINESS     : $(status_name "$BOOT_STATUS")"
+    if [ "$BOOT_STATUS" -gt "$VG_STATUS" ]; then VG_STATUS=$BOOT_STATUS; fi
+    set_overall_status "$VG_STATUS"
+}
+
+###############################################################################
 # MACHINE-READABLE SUMMARY
 ###############################################################################
 
@@ -1562,6 +1922,9 @@ main()
     check_ntp
     check_dump
     check_powerha
+    if [ "$HEALTH_PROFILE" = boot-readiness ]; then
+        check_boot_readiness
+    fi
 
     separator "RELIABILITY SUMMARY"
     echo "AIX software       : $(status_name "$OS_STATUS")"

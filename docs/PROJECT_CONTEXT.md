@@ -1,6 +1,6 @@
 # Project context
 
-Last updated: 2026-10-07. This is the durable project handover; update it as work
+Last updated: 2026-10-08. This is the durable project handover; update it as work
 progresses. Use Git status/history and actual implementation to verify details
 that can become stale. Development instructions are in `../AGENTS.md` and the
 operational contract is in `runbook.md`.
@@ -26,8 +26,9 @@ in a professional portfolio.
 * User's RHEL lab checkout: `/home/tkambasha/aix-reliability-automation`, in a
   VMware Workstation VM. Earlier healthy/degraded mock success on RHEL was
   reported by the user; current review validation runs locally on Windows.
-* No actual AIX LPAR is currently available. Windows validation uses bundled
-  Python 3.12 and Git Bash with Unix utilities. KornShell/AIX testing is pending.
+* No actual AIX LPAR is currently available. Current Windows validation uses
+  standalone Python 3.14.8 and Git Bash with Unix utilities; earlier tests used
+  bundled Python 3.12. KornShell/AIX testing is pending.
 
 ## Current architecture
 
@@ -42,19 +43,31 @@ Real AIX collectors OR deterministic healthy/degraded mocks
 The engine collects system/LPAR evidence and evaluates 15 check categories:
 software integrity, performance, paging, filesystems, VG/LV, PV, devices, MPIO,
 disk I/O, errpt, network, services, NTP, dump configuration and PowerHA.
+An opt-in `HEALTH_PROFILE=boot-readiness` adds rootvg/hd5/normal bootlist checks
+as named functions in the same script. It runs all baseline checks and raises
+the existing VG/LV category for additional findings. `standard` is the default.
 The 31-field `KEY=value` summary contains metadata, component statuses, nine
 metrics, PowerHA state and overall status/code. The comparator consumes these
 summaries without executing their contents. Inventory and playbooks remain
 placeholders; Ansible and Terraform integration is not implemented yet. A local
 Windows Jenkins Pipeline checks out the repository, runs the mock test suite,
 and archives its test log. The root `Jenkinsfile` is published and the Jenkins
-job loads it from Git; SCM-backed build #5 passed all 41 tests. See
+job loads it from Git; SCM-backed build #6 passed the then-current 41 tests. See
 `jenkins-windows-lab.md` for setup, job configuration and limitations.
 
 ## Decisions and current behavior
 
 * Preserve the existing collection engine; use localized fixes and regression
   tests rather than an unnecessary rewrite.
+* The user chose a middle ground for expansion: one shell script, named
+  functions and optional assessment profiles. No module loader or plugin system
+  is introduced. Boot readiness is the first opt-in addition, implemented from
+  IBM command semantics without copying the vendor UHC scripts supplied for
+  comparison.
+* `BOOT_MIN_COPIES` (1 by default; 1/2/3 accepted) applies to distinct hd5 boot
+  candidates, not whole-rootvg mirror coverage. Boot findings raise the existing
+  `VG_LV_STATUS`; they cannot erase earlier faults. New collectors treat failed,
+  empty, malformed or unsupported evidence as UNKNOWN and retain raw output.
 * `MOCK_HOSTNAME` defaults to `mock-aix01` independently of healthy/degraded
   profile, and is used consistently for the local node's reported identity.
 * Unsafe labels and invalid mock settings are rejected. Existing report OR
@@ -135,13 +148,34 @@ job loads it from Git; SCM-backed build #5 passed all 41 tests. See
     checks also passed. This completes the Windows mock CI milestone.
 11. Standalone Python 3.14.8 was installed by the user and verified locally on
     2026-10-07. All 41 tests passed with this runtime in 52.267 seconds, without
-    skips. The local Jenkinsfile and lab guide have been updated for its path;
-    the user approved committing this change. Push approval and verification
-    through Jenkins remain pending.
+    skips. Commit `275e42a` updated the Jenkinsfile and lab guide; the user
+    approved its push and Jenkins execution. Build #6 checked out that commit,
+    reported Python 3.14.8, and passed all 41 tests in 50.457 seconds without
+    skips. Its archived `all-tests-6.txt` was retrieved and verified.
+12. On 2026-10-08, the user authorized the single-script/profile design. The
+    optional boot-readiness profile and isolated fixture tests are implemented
+    locally. It assesses rootvg PV/LV state, complete contiguous hd5 copies,
+    normal bootlist membership, device availability and reported boot capability.
+    Detailed findings and suggested actions remain in the text report; the
+    summary retains 31 fields and 15 component statuses. Final local validation
+    passed all 65 tests (24 new) in 147.436 seconds using Python 3.14.8 and Git
+    Bash, without skips. Python compilation, Bash syntax and tracked/untracked
+    whitespace checks passed. Default healthy/degraded runs matched published
+    HEAD's exit codes and all 30 non-timestamp summary fields. Review also found
+    and fixed acceptance of hd5 partition numbers beyond a disk's capacity,
+    with regression coverage. The user approved committing and pushing this
+    reviewed addition on 2026-10-08; consult Git history for the publication
+    state. Verification through the SCM-backed Jenkins job remains pending.
 
 ## Remaining limitations
 
 * No real AIX, KornShell, HMC, VIOS, storage or PowerHA platform validation yet.
+* Boot readiness does not verify boot-image contents/freshness, individual path
+  reachability, firmware boot success, whole-rootvg redundancy or storage
+  failure-domain independence. WPAR/VIOS, alternate-OS disks and unsupported
+  boot policies are inconclusive. Profiles and copy policies are text-report
+  metadata only; keep them identical for comparison. Different faults inside
+  an already degraded VG/LV category cannot be distinguished by the comparator.
 * Existing collectors can substitute defaults or lack collection-failure
   indicators; a comparator cannot recover evidence missing from its inputs.
   Optional checks can report OK when not required. Collector hardening remains
@@ -159,27 +193,33 @@ job loads it from Git; SCM-backed build #5 passed all 41 tests. See
   change orchestration. No automated approval gate, HTML/PDF reporting or
   observability integration exists yet.
 * Windows Jenkins builds run on the built-in node in a local learning lab.
-  The user installed standalone Python 3.14.8 on 2026-10-07; the local Jenkinsfile
-  now points to it, but publication and a Jenkins run with it remain pending.
+  The user installed standalone Python 3.14.8 on 2026-10-07; the published
+  Jenkinsfile uses it, verified by successful Jenkins build #6.
   A separate execution agent remains future work. Archiving after a failed
   test has been configured but not yet demonstrated by a failing Pipeline run.
 
 ## Agreed next steps (not authorization to implement)
 
-1. Windows mock CI is complete. Finish the standalone Python migration, then
-   discuss a separate execution agent, fail-on-skip/empty-suite protection, build retention
+1. Commit/push approval for the reviewed boot-readiness addition was received
+   on 2026-10-08. Next verify it through SCM-backed Jenkins when authorized.
+   Validate native command output, permissions and KornShell on a test AIX LPAR
+   when available.
+   Additional profiles require separate scope; the vendor UHC breadth is not
+   a commitment to implement every check.
+2. Windows mock CI and the standalone Python migration are complete. Discuss a
+   separate execution agent, fail-on-skip/empty-suite protection, build retention
    and a controlled failed-build archiving demonstration. Keep teaching one
    step at a time; production readiness is not established by mock CI.
-2. Set up the separate RHEL Jenkins lab when authorized and VM access is
+3. Set up the separate RHEL Jenkins lab when authorized and VM access is
    supplied. Later extend CI to retain mock health
    reports and comparisons as well as test logs. A correctly detected degraded
    mock must pass its test rather than fail the entire pipeline unexpectedly.
-3. Introduce Ansible, prepare the RHEL automation controller and add inventories
+4. Introduce Ansible, prepare the RHEL automation controller and add inventories
    and playbooks. Evaluate the IBM Power AIX collection for later real targets.
-4. Introduce Terraform for an appropriate provisioning lab, then investigate
+5. Introduce Terraform for an appropriate provisioning lab, then investigate
    IBM PowerVS and suitable on-premises automation. Verify provider support;
    do not assume PowerVS tooling manages an existing HMC.
-5. Integrate approved components into a complete workflow and progressively add
+6. Integrate approved components into a complete workflow and progressively add
    reporting, evidence retention and observability as separately scoped work.
 
 Git manages source/review; Jenkins orchestrates; Terraform provisions supported

@@ -97,8 +97,10 @@ and its results verified directly. No actual AIX target was involved.
 The published Pipeline initially used Codex-bundled Python 3.12.14. On
 2026-10-07 the user installed standalone Python 3.14.8 (64-bit), verified at
 `C:\Users\tkamb\AppData\Local\Programs\Python\Python314\python.exe`.
-The local Jenkinsfile now sets `PYTHON_EXE` to that dedicated installation;
-publication and a Jenkins build with this new runtime remain pending. Using an
+The published Jenkinsfile sets `PYTHON_EXE` to that dedicated installation.
+Build #6 checked out commit `275e42a`, reported Python 3.14.8, and passed all
+41 tests in 50.457 seconds without skips. Its archived `all-tests-6.txt` was
+retrieved and verified. Using an
 explicit path avoids relying on the controller's inherited PATH or Store aliases.
 Local compatibility validation with Python 3.14.8 passed all 41 tests in
 52.267 seconds without skips; this was not a Jenkins build.
